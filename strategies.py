@@ -78,7 +78,7 @@ class Portfolio:
     def calculate_portfolio_returns(self) -> pd.Series:
         """Calculates the total daily portfolio return."""
         # Element-wise multiplication of weights and returns, then sum across assets
-        daily_returns = rel2log(log2rel(levret(self.weights,self.returns)).sum(axis=1))
+        daily_returns = rel2log((self.weights*log2rel(self.returns)).sum(axis=1))
         return daily_returns
 
 def levret(a,r):
