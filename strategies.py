@@ -119,42 +119,9 @@ def convol(obj,target=0.15,maxlev=10,prec=2,port=True):
         result = Portfolio(multipliers,df_returns)
     else:
         result = levret(multipliers,df_returns)
-        #result = pd.Series(rel2log(np.nanmean(log2rel(levret(weights,df_returns)),axis=1)),index=df_returns.index)
     return result
 
-def convol_(df_list,target=0.15,port=True):
-    if any(isinstance(obj, Portfolio) for obj in df_list):
-        # Access internal attributes
-        weights=[]
-        returns=[]
-        for obj in df_list:
-            if isinstance(obj, Portfolio):
-                weights.append(obj.weights)
-                returns.append(obj.returns)
-            else:
-                obj_weights = obj.copy()
-                obj_weights[:] = 1
-                weights.append(obj_weights)
-                returns.append(obj)
-        weights = pd.concat(weights).groupby(level=0).sum()
-        returns = pd.concat(returns).groupby(level=0).mean()
-        hv21 = an.emavol(returns,21,1)
-        weight_multiplier = 1/hv21.shift(1)*target/np.sqrt(252)
-        weight_multiplier.iloc[0,:] = 1
-        result = Portfolio(weights*weight_multiplier,returns)
-    else:
-        df_returns = pd.concat(df_list,axis=1)
-        hv21 = an.emavol(df_returns,21,1)
-        weights = 1/hv21.shift(1)*target/np.sqrt(252)
-        weights.iloc[0,:] = 1
-        if port:
-            result = Portfolio(weights,df_returns)
-        else:
-            result = levret(weights,df_returns)
-            #result = pd.Series(rel2log(np.nanmean(log2rel(levret(weights,df_returns)),axis=1)),index=df_returns.index)
-    return result
-
-def portmean(df_list,vol=None,target=0.15,port=True):
+def portmean(df_list,custom_weights=None,port=True):
     if any(isinstance(obj, Portfolio) for obj in df_list):
         # Access internal attributes
         n = len(df_list)
@@ -170,60 +137,32 @@ def portmean(df_list,vol=None,target=0.15,port=True):
                 weights.append(obj_weights)
                 returns.append(obj)
         weights = pd.concat(weights).groupby(level=0).sum()
-        returns = pd.concat(returns).groupby(level=0).mean()
-        result = Portfolio(weights/n,returns)
+        returns = pd.concat(returns).groupby(level=0).mean()       
+        if custom_weights is not None:
+            weights = weights.multiply(custom_weights, axis=1)
+        else:
+            weights = weights*1/n
+        result = Portfolio(weights,returns)
     else:
         y = pd.concat(df_list,axis=1)
-        if vol is not None:
-            if vol==1:
-                hv21 = an.emavol(y,21,1)
-                y=levret(1/hv21.shift(1)*target/np.sqrt(252),y)
-            if vol==2:
-                vol_sample = y.std()
-                y=levret(1/vol_sample*target/np.sqrt(252),y)
+        n = len(df_list)
+        weights = y.copy()
+        weights[:] = 1        
+        if custom_weights is not None:
+            weights = weights.multiply(custom_weights, axis=1)
+        else:
+            weights = weights*1/n
         if port:
-            n = len(df_list)
-            weights = y.copy()
-            weights[:] = 1/n
             result = Portfolio(weights,y)            
         else:
-            result = pd.Series(rel2log(np.nanmean(log2rel(y),axis=1)),index=y.index)
+            if custom_weights is not None:
+                weights = custom_weights
+            else:
+                weights = 1/n
+            result = pd.Series(rel2log(np.nansum(log2rel(y).multiply(weights, axis=1),axis=1)),index=y.index)
     return result
 
-def splot_(returns,control,divisor=None,cost=0.0000,dir="long",port=True):
-    if divisor is None:
-        df = pd.concat([returns, control], axis=1)
-        df.columns = ["returns","control"]
-        df.dropna(inplace=True)
-        newsignal = df.returns
-    else:
-        tmp = pd.concat([control, divisor], axis=1)
-        df = pd.concat([returns, tmp], axis=1)
-        df.columns = ["returns","control","divisor"]
-        df.dropna(inplace=True)
-        #df = df[(df.divisor>0)]
-        newsignal = pd.Series(np.where(df.divisor <= 0, np.nan, df.returns),index=df.index)
-    if dir=="both":
-        #newsignal = pd.Series(np.where(df.control <= 0, levret(-1,df.returns)-cost, df.returns-cost),index=df.index)
-        pos = pd.Series(np.where(df.control <= 0, -1, 1),index=df.index)
-        poschanges = pos.diff()!=0
-        newsignal = levret(pos,newsignal) - cost*poschanges        
-    if dir=="long":    
-        pos = pd.Series(np.where(df.control <= 0, np.nan, 1),index=df.index)
-        newsignal = pd.Series(np.where(df.control <= 0, np.nan, newsignal-cost),index=df.index)
-    if dir=="short":
-        pos = pd.Series(np.where(df.control <= 0, -1, np.nan),index=df.index)
-        newsignal = pd.Series(np.where(df.control <= 0, levret(-1,newsignal)-cost, np.nan),index=df.index)
-    #np.exp(newsignal.fillna(0, inplace=True).cumsum())
-    if port:
-        df_returns = df.iloc[:,0]
-        df_returns.columns = [returns.name]
-        df_weights = pos
-        df_weights.columns = df_returns.columns
-        newsignal = Portfolio(df_weights, df_returns)
-    return newsignal
-
-def splot(obj1,control,divisor=None,cost=0.0000,dir="long",port=True):
+def splot(obj1,control,cost=0.0000,dir="long",port=True):
     if isinstance(obj1, Portfolio):
         if not isinstance(obj1, Portfolio):
             obj1 = Portfolio.from_single_series(obj1)
