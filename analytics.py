@@ -26,13 +26,36 @@ def maxdd_rel(returns,stress=None):
     start = int(r.iloc[:end].argmax())
     return mdd, start, end
 
-def SR(x,b=252,con=False):
+def corr_stability(df,window = 30):
+    # 1. Compute pairwise rolling correlation (returns a MultiIndex DataFrame)
+    rolling_corr_matrix = df.rolling(window=window).corr()
+    
+    # 2. Unstack to move the second asset level into the columns
+    pairwise_corr = rolling_corr_matrix.unstack(level=1)
+    
+    # 3. FIX: Explicitly extract only unique pairs (avoids A-A self-corr and B-A duplicates)
+    unique_pairs = [(col1, col2) for col1 in df.columns for col2 in df.columns if col1 < col2]
+    pairwise_corr_unique = pairwise_corr[unique_pairs]
+    
+    # 4. Calculate your stability metrics using the properly filtered data
+    metrics = pd.DataFrame({
+        'Mean': pairwise_corr_unique.mean(),
+        'Std_Dev': pairwise_corr_unique.std(),
+        'Min': pairwise_corr_unique.min(),
+        'Max': pairwise_corr_unique.max()
+    })
+    
+    # 5. Calculate the Min-Max Spread
+    metrics['Min_Max_Spread'] = metrics['Max'] - metrics['Min']
+    
+    return metrics
+        
+def SR(x,b=252,con=False,rf=0):
     if isinstance(x, st.Portfolio):
         # Access internal attributes
-        y = x.calculate_portfolio_returns()       
+        y = st.log2rel(x.calculate_portfolio_returns()) - rf
     else:
-        #y = np.log(1+x)
-        y=x
+        y = st.log2rel(x) - rf
     if con:
         nas_pct = 0
     else:    
@@ -79,21 +102,6 @@ def strat_stats(x, benchmark=None, b=252, rate=0, overlap=1, window=None):
     x_filled = x.fillna(0)
 
     lm0 = OLSprepnfit(x_filled.cumsum(),pd.Series(np.arange(len(x_filled)),index=x_filled.index))
-    if window is not None:
-        rolling_sharpe_series = calculate_rolling_sharpe(x_filled, window=window, benchmark=None, b=b, rate=rate, overlap=overlap).dropna()
-        
-    else:
-        rolling_sharpe_series = [0,0]
-        
-    if benchmark is not None:
-        lm1 = OLSprepnfit(x_filled*b,benchmark*b)
-        alpha = lm1.params.iloc[0]
-        beta = lm1.params.iloc[1]
-        alpha_b1 = lm1.params.iloc[0]/lm1.params.iloc[1]
-    else:
-        alpha = np.nan
-        beta = np.nan
-        alpha_b1 = np.nan
 
     # Metrics
     nas_pct = x.isna().sum() / len(x)
@@ -140,8 +148,6 @@ def strat_stats(x, benchmark=None, b=252, rate=0, overlap=1, window=None):
     # Compile Results
     out = {
         'SR': float(avg0 / sd0) if sd0 != 0 else 0,
-        'minrollSR': min(rolling_sharpe_series),
-        'stdrollSR': float(np.std(rolling_sharpe_series)),
         'Sortino': float(avg0 / sdneg0) if sdneg0 != 0 else 0,
         'Calmar': float(avg0 / abs(max_dd)) if max_dd != 0 else 0,
         'Linearity': float(lm0.rsquared_adj),
@@ -154,11 +160,25 @@ def strat_stats(x, benchmark=None, b=252, rate=0, overlap=1, window=None):
         'NAs%': float(nas_pct),
         'PF': float(pf),
         #'SR.ACT': float(avg_scaled / sd_scaled) if sd_scaled != 0 else 0, #in fact it should be approx. avg0/sd0
-        'SR.CON': float(avg / sd) if sd != 0 else 0,
-        'alpha': float(alpha),
-        'beta': float(beta),
-        'alpha_b1': float(alpha_b1)       
+        'SR.CON': float(avg / sd) if sd != 0 else 0      
     }
+    
+    if window is not None:
+        rolling_sharpe_series = calculate_rolling_sharpe(x_filled, window=window, benchmark=None, b=b, rate=rate, overlap=overlap).dropna()
+        out['minrollSR'] = min(rolling_sharpe_series)
+        out['stdrollSR'] = float(np.std(rolling_sharpe_series))
+    if benchmark is not None:
+        lm1 = OLSprepnfit(x_filled*b,benchmark*b)
+        alpha = lm1.params.iloc[0]
+        beta = lm1.params.iloc[1]
+        alpha_b1 = lm1.params.iloc[0]/lm1.params.iloc[1]
+        res_variance_a = lm1.scale
+        out['Jensens_alpha'] = float(alpha)
+        out['beta'] = float(beta)
+        out['alpha_b1'] = float(alpha_b1)       
+        out['Treynor'] = float(avg0/beta)
+        out['Grinolds_IR'] = float(alpha/res_variance_a)
+        
     return {k: round(v, 3) for k, v in out.items()}
  
 def omega_ratio(returns, threshold=0):

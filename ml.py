@@ -473,7 +473,7 @@ def get_hellwig_score_for_subset(X, y, feature_subset):
     
     return h_k_score
 
-def hmmfit(model,df,m=100, bestof=1):
+def hmmfit(model,df,m=100, bestof=1, variant='GHMM'):
     #model is of hmmlearn hmm class
     data = df.dropna()
     for i in range(bestof):
@@ -486,8 +486,9 @@ def hmmfit(model,df,m=100, bestof=1):
             max_model = model_tmp
             max_score = score
     states = pd.Series(max_model.predict(data.values.reshape(-1, 1)*m),index=data.index)
-    if (max_model.n_components==2) & (states.mean() < 0.5):
-        max_model = switch2classhmm(max_model)   
+    if variant=='GHMM':
+        if (max_model.n_components==2) & (states.mean() < 0.5):
+            max_model = switch2classhmm(max_model)   
     return max_model
 
 def switch2classhmm(model):
@@ -555,19 +556,67 @@ def hmmrollpredict(model,df_train,df_test,s=160,m=100,threshold=0.6,oosonly=Fals
     else:
         return pd.Series(np.concatenate((out0,np.array(out))),index=df_merged.index)
 
-def assign_hmmstates(y_train,y_test,m=1,algo='map',bestof=1,n_components=2):
-    model = hmm.GaussianHMM(n_components, covariance_type="diag", n_iter=1000, algorithm = algo)
-    model = hmmfit(model,y_train,m=m,bestof=bestof)
+def assign_hmmstates(y_train,y_test,m=1,algo='map',bestof=1,n_components=2,variant='GHMM',trueoos=False):   
+    if variant=='GHMM':    
+        model = hmm.GaussianHMM(n_components, covariance_type="diag", n_iter=1000, algorithm = algo)
+    elif variant=='GMMHMM':
+        model = hmm.GMMHMM(
+            n_components=n_components,      # Number of hidden states
+            n_mix=3,             # Number of Gaussians per GMM state
+            covariance_type="diag", 
+            n_iter=1000,
+            algorithm = algo
+        )   
+    model = hmmfit(model,y_train,m=m,bestof=bestof,variant=variant)
     hs_ins = hmmpredict(model,y_train,m=m)
-    hs_oos = hmmpredict(model,y_test,m=m)
+    if trueoos:
+        hs_oos = hmmrollpredict(model,y_train,y_test,s=len(y_train),m=m,oosonly=True,probs=False)
+    else:
+        hs_oos = hmmpredict(model,y_test,m=m)
     return model, hs_ins, hs_oos
 
-def assign_gmmstates(y_train,y_test,covariance_type='full',n_components=2):
+def assign_msmstates(y_train,y_test,n_components=2,trend='c'):
+    #model_insample = sm.tsa.MarkovAutoregression(y_train.dropna(), k_regimes=2, order=1, trend='c', switching_ar=True, switching_trend=True, switching_variance=True)
+    # 1. Fit the model on training data
+    model = sm.tsa.MarkovRegression(
+        y_train, k_regimes=n_components, trend=trend, switching_trend=True, switching_variance=True
+    )
+    res_insample = model.fit()
+    
+    probs = res_insample.smoothed_marginal_probabilities
+    hs_ins = np.argmax(probs, axis=1)
+    hs_ins = pd.Series(hs_ins, index=y_train.dropna().index)
+    hs_ins.name = 'predicted_regimes'
+    
+    # 2. Combine train and test to preserve historical filtering memory
+    # pandas.concat keeps your timestamps aligned
+    y_combined = pd.concat([y_train, y_test])
+    
+    # 3. Create a model over the whole timeline, but ONLY apply Hamilton's Filter
+    # Crucial: We do NOT use .fit(). We pass the frozen in-sample parameters.
+    model_combined = sm.tsa.MarkovRegression(y_combined, k_regimes=n_components, trend=trend, switching_trend=True, switching_variance=True)
+    res_combined = model_combined.filter(res_insample.params)
+    
+    # 3. Extract the filtering probabilities safely
+    # This extracts ONLY the out-of-sample portion of the filtered probabilities
+    oos_probs = res_combined.filtered_marginal_probabilities.iloc[-len(y_test):]
+    
+    # 4. Predict the most likely regime for each OOS point
+    hs_oos = oos_probs.idxmax(axis=1)
+    hs_oos = pd.Series(hs_oos, index=y_test.dropna().index)
+    hs_oos.name = 'predicted_regimes'
+    return model, hs_ins, hs_oos
+
+def assign_gmmstates(y_train,y_test,covariance_type='full',n_components=2,probs=False):
     y_train = pd.DataFrame(y_train) # if we dont convert series to DF then we need not only take .values but .values.reshape(-1, 1)
     y_test = pd.DataFrame(y_test) 
     model = sk.mixture.GaussianMixture(n_components, covariance_type=covariance_type, random_state=0).fit(y_train.dropna().values)
-    hs_ins = pd.Series(model.predict_proba(y_train.dropna().values)[:,0],index=y_train.dropna().index)
-    hs_oos = pd.Series(model.predict_proba(y_test.values)[:,0],index=y_test.index)
+    if probs:
+        hs_ins = pd.Series(model.predict_proba(y_train.dropna().values)[:,0],index=y_train.dropna().index)
+        hs_oos = pd.Series(model.predict_proba(y_test.values)[:,0],index=y_test.index)
+    else:
+        hs_ins = pd.Series(model.predict(y_train.dropna().values),index=y_train.dropna().index)
+        hs_oos = pd.Series(model.predict(y_test.values),index=y_test.index)       
     return model, hs_ins, hs_oos
 
 def transmat(predicted_regimes):

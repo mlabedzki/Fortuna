@@ -107,7 +107,7 @@ def download_stooq(names,f="d",apikey='oHDJLRuxiTZo6zpErBdhsS7GcFeOv824'):
             series = pd.read_csv(stooq_path+names[i]+"&d1=18710101&d2=20291231&apikey="+apikey+"&i="+f, header=0)
             series.to_csv(data_folder+names[i]+"_d.csv", index=False)
 
-def load_rates(rates_names,col_names="",f="d",col=3,trans="",fgst="",fq="",start="",end=""):
+def load_fred(rates_names,col_names="",f="d",col=3,trans="",fgst="",fq="",start="",end=""):
     rates = []
     for i in range(0,len(rates_names)):
         if (rates_names[i]=="null"):

@@ -55,8 +55,12 @@ def dailyzation(df,series):
 # monthly_ts = daily_ts.resample('ME').last() # Aggregate using the mean value
 # merged_df = pd.merge(left_df, right_df, left_index=True, right_index=True, how='outer')
 
-def pltcum(series):
-    return plt.plot(series.cumsum())  
+def pltcum(obj):
+    if isinstance(obj, st.Portfolio):
+        x = obj.calculate_portfolio_returns()   
+    else:
+        x = obj
+    return plt.plot(x.cumsum())  
 
 def plot_auc_curve(fpr, tpr):
     """

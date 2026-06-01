@@ -81,6 +81,13 @@ class Portfolio:
         daily_returns = rel2log((self.weights*log2rel(self.returns)).sum(axis=1))
         return daily_returns
 
+    def calculate_portfolio_vols_nocorr(self,n=21) -> pd.Series:
+        """Calculates the daily weighted avarege ewma vol with 0 correlation assumption"""
+        # Element-wise multiplication of weights and vols, then sum across assets
+        df_vols = an.emavol(self.returns,n)
+        df_vols = (self.weights*df_vols.shift(1)).sum(axis=1)
+        return df_vols
+    
 def levret(a,r):
     if isinstance(r, Portfolio):
         r.weights = a*r.weights
@@ -105,7 +112,7 @@ def rel2log(x):
 def mm2yy(x,periods=12):
     return log2rel(x.cumsum().diff(periods))
 
-def convol(obj,target=0.15,maxlev=10,prec=2,port=True):
+def convol(obj,target=0.15,maxlev=10,prec=2,port=False):
     if isinstance(obj, Portfolio):
         df_returns = obj.returns
     else:
@@ -121,7 +128,7 @@ def convol(obj,target=0.15,maxlev=10,prec=2,port=True):
         result = levret(multipliers,df_returns)
     return result
 
-def portmean(df_list,custom_weights=None,port=True):
+def portmean(df_list,lev=1,custom_weights=None,port=False):
     if any(isinstance(obj, Portfolio) for obj in df_list):
         # Access internal attributes
         n = len(df_list)
@@ -142,7 +149,7 @@ def portmean(df_list,custom_weights=None,port=True):
             weights = weights.multiply(custom_weights, axis=1)
         else:
             weights = weights*1/n
-        result = Portfolio(weights,returns)
+        result = Portfolio(weights.multiply(lev,axis=0),returns) #Portfolio(weights*lev,returns)
     else:
         y = pd.concat(df_list,axis=1)
         n = len(df_list)
@@ -153,16 +160,16 @@ def portmean(df_list,custom_weights=None,port=True):
         else:
             weights = weights*1/n
         if port:
-            result = Portfolio(weights,y)            
+            result = Portfolio(weights.multiply(lev,axis=0),y)            
         else:
             if custom_weights is not None:
                 weights = custom_weights
             else:
                 weights = 1/n
-            result = pd.Series(rel2log(np.nansum(log2rel(y).multiply(weights, axis=1),axis=1)),index=y.index)
+            result = pd.Series(rel2log(np.nansum(log2rel(y).multiply(weights, axis=1).multiply(lev,axis=0),axis=1)),index=y.index)
     return result
 
-def splot(obj1,control,cost=0.0000,dir="long",port=True):
+def splice(obj1,control,cost=0.0000,dir="long",port=False):
     if isinstance(obj1, Portfolio):
         if not isinstance(obj1, Portfolio):
             obj1 = Portfolio.from_single_series(obj1)
@@ -199,7 +206,7 @@ def splot(obj1,control,cost=0.0000,dir="long",port=True):
         result = pos1*df.returns1 - cost*poschanges #TBD: apply cross sectional formula as we sum logrets here
     return result
 
-def switcher(obj1,obj2,control,cost=0.0000,port=True):
+def switcher(obj1,obj2,control,cost=0.0000,port=False):
     if isinstance(obj1, Portfolio) or isinstance(obj2, Portfolio):
         if not isinstance(obj1, Portfolio):
             obj1 = Portfolio.from_single_series(obj1)
@@ -489,7 +496,7 @@ def shortMRstrat(returns, idx, m, up, lo, spread=0.2, v=0):
     raw_signals = (tshortsignals - tcloseshortsignals).shift(1).fillna(0)
     shorts = capcumsum(raw_signals)
       
-    res = splot(levret(1,returns), shorts.shift(1), cost=0.000, dir="long")
+    res = splice(levret(1,returns), shorts.shift(1), cost=0.000, dir="long")
     
     # 6. Apply the spread penalty
     spread_impact = (np.abs(np.sign(shorts.shift(1)).diff()) * spread) / 2
@@ -654,8 +661,8 @@ def perfstrat(levels,period,begin=None,end=None,cost=0,mod=0.2):
     #sma_perf = ZLEMA(np.log(levels),period*base).shift(-int(period*base*0.15))
     volrel = float(ut.trimdf(an.emavol(sma_perf.diff()),begin,end).mean()/ut.trimdf(an.emavol_level(levels),begin,end).mean())
     periods = spec.calculate_periodic_times_series(np.log(levels)/sma_perf,1)
-    t1 = splot(np.log(levels).diff().shift(-1),(sma_perf-sma_perf.shift()),cost=cost)
-    t2 = splot(np.log(levels).diff().shift(-1),(np.log(levels)<sma_perf),cost=cost)
+    t1 = splice(np.log(levels).diff().shift(-1),(sma_perf-sma_perf.shift()),cost=cost)
+    t2 = splice(np.log(levels).diff().shift(-1),(np.log(levels)<sma_perf),cost=cost)
     return (period,an.SR(ut.trimdf(t1,begin,end)),an.SR(ut.trimdf(t2,begin,end)),volrel,periods,int(period*base*mod))
 
 def meanstrat(pclose,popen,base,par,start="2005-10-01"): 
